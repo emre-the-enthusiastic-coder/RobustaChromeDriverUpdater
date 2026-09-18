@@ -1,0 +1,33 @@
+# Runtime and temporary directories
+temp/
+*.tmp
+
+# Execution and audit logs
+logs/*
+!logs/.gitkeep
+*.log
+ChromeAbout_UIATree.json
+ChromeAbout_UIATree.log
+ChromeDriverUpdater.log
+
+# Driver binaries & archives (Ensure binaries are downloaded fresh from official sources)
+*.exe
+!chromedriver.exe
+chromedriver.exe
+*.zip
+*.tar.gz
+*.7z
+
+# Windows OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# IDE and editor settings
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates

@@ -1,0 +1,9 @@
+{
+    "DriverDir":  "C:\\RobustaWorker\\driver",
+    "ChromeExePath":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "AutoKillProcesses":  true,
+    "CleanTarget":  true,
+    "Force":  false,
+    "UpdateBrowserFirst":  true,
+    "LastUpdated":  ""
+}
