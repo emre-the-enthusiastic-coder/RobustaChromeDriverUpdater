@@ -207,7 +207,8 @@ Aracin varsayilan davranisi `config.json` uzerinden yonetilebilir. Arayuzden deg
   "AutoKillProcesses": true,
   "CleanTarget": true,
   "Force": false,
-  "LastUpdated": "2026-09-18 14:51:33"
+  "UpdateBrowserFirst": true,
+  "LastUpdated": ""
 }
 ```
 
