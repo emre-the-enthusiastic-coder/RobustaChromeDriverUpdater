@@ -55,12 +55,9 @@ D:\ChromeDriverUpdater\
 ├── ChromeDriverUpdater.ps1        # Cekirdek motor ve ortak calistirici (CLI & GUI yonlendirici)
 ├── ChromeDriverUpdater-GUI.ps1    # Modern WPF Grafik Arayuzu (Donmayan Runspace & Dinamik Renk)
 ├── Invoke-ChromeRelaunchUIA.ps1   # Chrome UIA arayuz tarama ve otomatik yeniden baslatma (Relaunch) motoru
-├── Inspect-ChromeAboutUIA.ps1    # Chrome erisilebilirlik agacini (UIA Tree) inceleme ve JSON dokme araci
 ├── Run-CompleteSync.bat           # 2 Asamali Tam Senkronizasyon (UIA Relaunch + ChromeDriver Sync)
 ├── Launch-GUI.bat                 # Arayuzu konsol penceresi olmadan baslatan cift tiklama kisayolu
 ├── Run-Silent.bat                 # Otomasyonlar ve Task Scheduler icin sessiz calistirici
-├── Test-UIA-Relaunch.bat          # Sadece Chrome UIA Relaunch motorunu test etme kisayolu
-├── Test-UIA-Inspect.bat           # Chrome UIA erisilebilirlik agacini inceleme testi kisayolu
 ├── Install-ScheduledTask.ps1      # Windows Gorev Zamanlayicisi'na otomatik gorev ekleyici
 ├── config.json                    # Varsayilan ve son kullanilan yapilandirma ayarlari
 └── logs\                          # Islem gunluklerinin tutuldugu klasor (Git tarafindan ignore edilir)
