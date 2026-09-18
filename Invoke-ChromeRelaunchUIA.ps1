@@ -13,10 +13,11 @@
 [CmdletBinding()]
 param(
     [string]$ChromeExePath = '',
-    [int]$TimeoutSeconds = 30,
+    [int]$TimeoutSeconds = 90,
     [bool]$WaitForRestart = $true,
     [bool]$CleanSession = $true,
-    [bool]$CloseAfterCheck = $false
+    [bool]$CloseAfterCheck = $false,
+    [scriptblock]$LogCb = $null
 )
 
 $ErrorActionPreference = 'Stop'
@@ -155,6 +156,21 @@ if ([string]::IsNullOrWhiteSpace($ChromeExePath)) {
 if (-not (Test-Path -LiteralPath $ChromeExePath)) {
     Write-Error "Google Chrome dosyasi bulunamadi: $ChromeExePath"
     exit 1
+}
+
+function Log-Uia {
+    param(
+        [string]$Message,
+        [string]$Level = 'INFO',
+        [ConsoleColor]$Color = [ConsoleColor]::Gray
+    )
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Write-Host "[$timestamp] [RELAUNCH] $Message" -ForegroundColor $Color
+    if ($LogCb) {
+        try {
+            $null = & $LogCb "[$timestamp] [RELAUNCH] $Message" $Level
+        } catch {}
+    }
 }
 
 # SADECE Google Chrome Pencerelerini Yakalayan Fonksiyon (Brave, Edge elenir)
@@ -349,17 +365,15 @@ function Stop-GoogleChromeProcess {
 }
 
 # 3. Ana Isleyis
-$now = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-Write-Host "[$now] [RELAUNCH] Google Chrome UIA Otomatik Yeniden Baslatma baslatildi." -ForegroundColor Cyan
-Write-Host "[$now] [RELAUNCH] Hedef Tarayici : $ChromeExePath (Google Chrome)" -ForegroundColor Gray
+Log-Uia "Google Chrome UIA Otomatik Yeniden Baslatma baslatildi." -Level 'INFO' -Color Cyan
+Log-Uia "Hedef Tarayici : $ChromeExePath (Google Chrome)" -Level 'INFO' -Color Gray
 
 if ($CleanSession) {
     # Acik diger sekmelerle / pencerelerle karismamasi icin Chrome temizlenir (Brave vb. elenmez)
     Stop-GoogleChromeProcess -ExpectedExePath $ChromeExePath
     
-    $now = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Write-Host "[$now] [RELAUNCH] Temiz Google Chrome oturumu baslatiliyor..." -ForegroundColor Cyan
-    Write-Host "[$now] [RELAUNCH] Sayfa: chrome://settings/help" -ForegroundColor Gray
+    Log-Uia "Temiz Google Chrome oturumu baslatiliyor..." -Level 'INFO' -Color Cyan
+    Log-Uia "Sayfa: chrome://settings/help" -Level 'INFO' -Color Gray
     
     $chromeArgs = @(
         "chrome://settings/help",
@@ -373,11 +387,11 @@ if ($CleanSession) {
     # Yalnizca GOOGLE CHROME penceresini ara
     $chromeWin = Get-GoogleChromeUiaWindow -ExpectedExePath $ChromeExePath -WaitSec 3
     if (-not $chromeWin) {
-        Write-Host "[$now] [RELAUNCH] Calisan Google Chrome penceresi bulunamadi. Dogrudan chrome.exe ile aciliyor..." -ForegroundColor Yellow
+        Log-Uia "Calisan Google Chrome penceresi bulunamadi. Dogrudan chrome.exe ile aciliyor..." -Level 'WARN' -Color Yellow
         Start-Process -FilePath $ChromeExePath -ArgumentList "chrome://settings/help", "--force-renderer-accessibility", "--no-default-browser-check", "--no-first-run"
         $chromeWin = Get-GoogleChromeUiaWindow -ExpectedExePath $ChromeExePath -WaitSec 15
     } else {
-        Write-Host "[$now] [RELAUNCH] Google Chrome penceresi baglandi: '$($chromeWin.Current.Name)'" -ForegroundColor Green
+        Log-Uia "Google Chrome penceresi baglandi: '$($chromeWin.Current.Name)'" -Level 'INFO' -Color Green
         Start-Process -FilePath $ChromeExePath -ArgumentList "chrome://settings/help"
         Start-Sleep -Seconds 2
     }
@@ -389,12 +403,12 @@ if (-not $chromeWin) {
 }
 
 $hwnd = [IntPtr]$chromeWin.Current.NativeWindowHandle
-Write-Host "[$now] [RELAUNCH] Aktif Google Chrome HWND: $hwnd" -ForegroundColor Green
+Log-Uia "Aktif Google Chrome HWND: $hwnd" -Level 'INFO' -Color Green
 
 # chrome://settings/help sayfasindaki Document ogesini bekle
 $doc = Get-ChromeAboutDocument -ChromeWindow $chromeWin -WaitSec 8
 if (-not $doc) {
-    Write-Host "[$now] [RELAUNCH] chrome://settings/help sayfasina Omnibox ile gidiliyor..." -ForegroundColor Gray
+    Log-Uia "chrome://settings/help sayfasina Omnibox ile gidiliyor..." -Level 'INFO' -Color Gray
     $null = Navigate-ChromeToUrl -ChromeWindow $chromeWin -Url "chrome://settings/help"
     $doc = Get-ChromeAboutDocument -ChromeWindow $chromeWin -WaitSec 8
 }
@@ -404,10 +418,10 @@ if (-not $doc) {
     exit 1
 }
 
-Write-Host "[$now] [RELAUNCH] Belge yuklendi: '$($doc.Current.Name)'" -ForegroundColor Green
+Log-Uia "Belge yuklendi: '$($doc.Current.Name)'" -Level 'INFO' -Color Green
 
-# 4. Sayfayi Tara: Sürüm, Uyarı ve Relaunch Butonu
-Write-Host "[$now] [RELAUNCH] Google Chrome Hakkinda sayfasi denetleniyor..." -ForegroundColor Cyan
+# 4. Sayfayi İzle: Sürüm Kontrolü, Güncelleme İndirme ve Relaunch Butonu Beklemesi
+Log-Uia "Google Chrome Hakkinda sayfasi denetleniyor (Guncelleme durumu izleniyor)..." -Level 'INFO' -Color Cyan
 
 $btnCond = New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
@@ -418,46 +432,116 @@ $textCond = New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.ControlType]::Text
 )
 
-# Metinleri oku (Surum ve Durum tespiti)
-$allTexts = $doc.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond)
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$lastLoggedState = ''
+$consecutiveUpToDateCount = 0
+$relaunchBtn = $null
 $currentVersion = ''
 $statusSummary = ''
+$isUpToDate = $false
+$isError = $false
 
-foreach ($t in $allTexts) {
-    $val = $t.Current.Name
-    if ($val -match '\b(\d+\.\d+\.\d+\.\d+)\b') {
-        $currentVersion = $Matches[1]
+Log-Uia "Tarayici guncelleme durumu bekleniyor (Maksimum $TimeoutSeconds sn)..." -Level 'INFO' -Color Gray
+
+while ($sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+    # A) Relaunch butonu var mi kontrol et (En yuksek oncelik!)
+    try {
+        $allButtons = $doc.FindAll([System.Windows.Automation.TreeScope]::Descendants, $btnCond)
+        foreach ($b in $allButtons) {
+            try {
+                $bId = $b.Current.AutomationId
+                $bName = $b.Current.Name
+                if ($bId -eq 'relaunch' -or $bName -match 'Yeniden başlat|Relaunch|Redémarrer|Reiniciar|Neu starten') {
+                    $relaunchBtn = $b
+                    break
+                }
+            } catch {}
+        }
+    } catch {
+        # Belge ogesi gecici olarak yenileniyorsa tekrar yakala
+        $doc = Get-ChromeAboutDocument -ChromeWindow $chromeWin -WaitSec 3
     }
-    if ($val -match 'güncel|guncel|up to date|yeniden başlat|relaunch|güncelleniyor|updating|tamamlanması için') {
-        $statusSummary = $val
-    }
-}
 
-Write-Host "[$now] [RELAUNCH] Google Chrome Surumu : $currentVersion" -ForegroundColor Gray
-Write-Host "[$now] [RELAUNCH] Durum Bildirimi     : $statusSummary" -ForegroundColor Gray
-
-# Relaunch Butonunu Ara (AutomationId = 'relaunch' veya Name = 'Yeniden başlat' / 'Relaunch')
-$allButtons = $doc.FindAll([System.Windows.Automation.TreeScope]::Descendants, $btnCond)
-$relaunchBtn = $null
-
-foreach ($b in $allButtons) {
-    if ($b.Current.AutomationId -eq 'relaunch' -or $b.Current.Name -match 'Yeniden başlat|Relaunch') {
-        $relaunchBtn = $b
+    if ($relaunchBtn) {
+        Log-Uia "Bekleyen guncelleme tamamlandi ve 'Yeniden baslat' butonu tespit edildi!" -Level 'SUCCESS' -Color Yellow
         break
     }
+
+    # B) Metin durumlarini oku (Surum ve Durum tespiti)
+    try {
+        $allTexts = $doc.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond)
+        $detectedStatus = ''
+        foreach ($t in $allTexts) {
+            try {
+                $val = $t.Current.Name
+                if (-not $val) { continue }
+                if ($val -match '\b(\d+\.\d+\.\d+\.\d+)\b') {
+                    $currentVersion = $Matches[1]
+                }
+                if ($val -match 'denetleniyor|checking|güncelleniyor|updating|indiriliyor|tamamlanması için|güncel|guncel|up to date|hata|error') {
+                    $detectedStatus = $val
+                }
+            } catch {}
+        }
+        if ($detectedStatus) {
+            $statusSummary = $detectedStatus
+        }
+    } catch {}
+
+    # C) Durum analizi
+    $isChecking = $statusSummary -match 'denetleniyor|checking|kontrol ediliyor|buscando|recherche|prüfen'
+    $isUpdating = $statusSummary -match 'güncelleniyor|updating|indiriliyor|downloading|actualizando'
+    $isError    = $statusSummary -match 'hata oluştu|hata kodu|error occurred|error code|failed|échec|fehler'
+    $isUpToDate = ($statusSummary -match 'güncel|guncel|up to date|à jour|actualizado') -and (-not $isChecking)
+
+    # Durum degistiyse kullaniciya canli bildir
+    if ($statusSummary -ne $lastLoggedState -and $statusSummary) {
+        $lastLoggedState = $statusSummary
+        Log-Uia "Tarayici Durumu: '$statusSummary'" -Level 'INFO' -Color Cyan
+    }
+
+    # D) Duruma gore bekleme karari
+    if ($isChecking) {
+        # 'Güncellemeler denetleniyor...' -> Sunucu yaniti bekleniyor
+        $consecutiveUpToDateCount = 0
+        Start-Sleep -Milliseconds 1500
+        continue
+    }
+
+    if ($isUpdating) {
+        # 'Google Chrome güncelleniyor (%XX)...' -> Indirme ve kurulum devam ediyor
+        $consecutiveUpToDateCount = 0
+        Start-Sleep -Milliseconds 2000
+        continue
+    }
+
+    if ($isError) {
+        Log-Uia "Guncelleme denetiminde hata veya uyari bildirildi: '$statusSummary'" -Level 'WARN' -Color Yellow
+        break
+    }
+
+    if ($isUpToDate) {
+        # 'Google Chrome güncel' -> Dogrulama sayaci
+        $consecutiveUpToDateCount++
+        if ($consecutiveUpToDateCount -ge 2) {
+            Log-Uia "Google Chrome guncelligi dogrulandi (Surum: $currentVersion)." -Level 'SUCCESS' -Color Green
+            break
+        }
+        Start-Sleep -Milliseconds 1500
+        continue
+    }
+
+    # Eger durum metni henuz render olmadiysa kisa bekle ve devam et
+    Start-Sleep -Milliseconds 1500
 }
 
 if (-not $relaunchBtn) {
-    $isUpToDate = $statusSummary -match 'güncel|guncel|up to date'
-    $isDownloading = $statusSummary -match 'güncelleniyor|updating'
-
-    $now = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     if ($CloseAfterCheck) {
         Stop-GoogleChromeProcess -ExpectedExePath $ChromeExePath
     }
 
     if ($isUpToDate) {
-        Write-Host "[$now] [RELAUNCH] Google Chrome zaten en guncel surumde ($currentVersion). Yeniden baslatma gerekmiyor." -ForegroundColor Green
+        Log-Uia "Google Chrome zaten en guncel surumde ($currentVersion). Yeniden baslatma gerekmiyor." -Level 'SUCCESS' -Color Green
         return [PSCustomObject]@{
             Success         = $true
             Status          = 'AlreadyUpToDate'
@@ -467,42 +551,41 @@ if (-not $relaunchBtn) {
             ChromeExePath   = $ChromeExePath
             Message         = "Google Chrome gunceldir, bekleyen guncelleme yok."
         }
-    } elseif ($isDownloading) {
-        Write-Host "[$now] [RELAUNCH] Google Chrome guncellemeyi arka planda indiriyor." -ForegroundColor Yellow
+    } elseif ($isError) {
+        Log-Uia "Guncelleme denetiminde hata veya kisitlama bildirildi ($statusSummary). Mevcut surumle devam ediliyor ($currentVersion)." -Level 'WARN' -Color Yellow
         return [PSCustomObject]@{
             Success         = $true
-            Status          = 'UpdateDownloading'
+            Status          = 'UpdateCheckError'
             Relaunched      = $false
             CurrentVersion  = $currentVersion
             NewVersion      = $currentVersion
             ChromeExePath   = $ChromeExePath
-            Message         = "Guncelleme arka planda indiriliyor."
+            Message         = "Guncelleme denetiminde hata bildirildi: $statusSummary"
         }
     } else {
-        Write-Host "[$now] [RELAUNCH] Bekleyen yeniden baslatma butonu bulunamadi." -ForegroundColor Yellow
+        Log-Uia "Guncelleme bekleme suresi ($TimeoutSeconds sn) doldu. Mevcut surumle devam ediliyor: $currentVersion" -Level 'WARN' -Color Yellow
         return [PSCustomObject]@{
             Success         = $true
-            Status          = 'RelaunchNotFound'
+            Status          = 'UpdateWaitTimeout'
             Relaunched      = $false
             CurrentVersion  = $currentVersion
             NewVersion      = $currentVersion
             ChromeExePath   = $ChromeExePath
-            Message         = "Yeniden baslat butonu tespit edilemedi."
+            Message         = "Guncelleme bekleme suresi doldu."
         }
     }
 }
 
 # 5. Relaunch Butonu Bulundu - Guvenli Cok Katmanli Tetikleme
-$now = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-Write-Host "[$now] [RELAUNCH] Google Chrome icin bekleyen guncelleme tespit edildi!" -ForegroundColor Yellow
+Log-Uia "Google Chrome icin bekleyen guncelleme tespit edildi!" -Level 'WARN' -Color Yellow
 
 # Adim A: Google Chrome penceresini kesin olarak one getir ve aktive et
-Write-Host "[$now] [RELAUNCH] [1/4] Google Chrome penceresi on plana aliniyor..." -ForegroundColor Gray
+Log-Uia "[1/4] Google Chrome penceresi on plana aliniyor..." -Level 'INFO' -Color Gray
 [ChromeRelauncherHelper]::ActivateWindow($hwnd)
 Start-Sleep -Milliseconds 400
 
 # Adim B: Butona UIA uzerinden odaklan (Focus)
-Write-Host "[$now] [RELAUNCH] [2/4] 'Yeniden baslat' butonuna odaklaniliyor..." -ForegroundColor Gray
+Log-Uia "[2/4] 'Yeniden baslat' butonuna odaklaniliyor..." -Level 'INFO' -Color Gray
 try {
     $relaunchBtn.SetFocus()
     Start-Sleep -Milliseconds 250
@@ -513,13 +596,13 @@ $rect = $relaunchBtn.Current.BoundingRectangle
 if ($rect.Width -gt 0 -and $rect.Height -gt 0) {
     $clickX = [int]($rect.X + ($rect.Width / 2))
     $clickY = [int]($rect.Y + ($rect.Height / 2))
-    Write-Host "[$now] [RELAUNCH] [3/4] Butona fiziksel sol tiklama yapiliyor ($clickX, $clickY)..." -ForegroundColor Cyan
+    Log-Uia "[3/4] Butona fiziksel sol tiklama yapiliyor ($clickX, $clickY)..." -Level 'INFO' -Color Cyan
     [ChromeRelauncherHelper]::ClickCoordinates($clickX, $clickY)
     Start-Sleep -Milliseconds 150
 }
 
 # Adim D: Klavyeden SPACE ve ENTER tus vuruslari gonder (Odaklanmis buton tetiklemesi)
-Write-Host "[$now] [RELAUNCH] [4/4] Buton aktivasyon sinyalleri gonderiliyor (Space + Invoke)..." -ForegroundColor Gray
+Log-Uia "[4/4] Buton aktivasyon sinyalleri gonderiliyor (Space + Invoke)..." -Level 'INFO' -Color Gray
 [ChromeRelauncherHelper]::PressSpace()
 Start-Sleep -Milliseconds 100
 
@@ -529,7 +612,7 @@ try {
 } catch {}
 
 # 6. Yeniden Baslama Kontrolu ve Guvenli Fallback
-Write-Host "[$now] [RELAUNCH] Yeniden baslama durumu denetleniyor (3 sn)..." -ForegroundColor Cyan
+Log-Uia "Yeniden baslama durumu denetleniyor (3 sn)..." -Level 'INFO' -Color Cyan
 Start-Sleep -Seconds 3
 
 # Eger pencere veya buton hala acik ve aktifse, kesin native restart URL'sini cagir
@@ -544,16 +627,14 @@ try {
 }
 
 if ($isStillOpen) {
-    $now = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Write-Host "[$now] [RELAUNCH] Buton tiklamasina UI yaniti gecikti. Native 'chrome://restart' ile kesin yeniden baslatiliyor..." -ForegroundColor Yellow
+    Log-Uia "Buton tiklamasina UI yaniti gecikti. Native 'chrome://restart' ile kesin yeniden baslatiliyor..." -Level 'WARN' -Color Yellow
     [ChromeRelauncherHelper]::ActivateWindow($hwnd)
     $null = Navigate-ChromeToUrl -ChromeWindow $chromeWin -Url "chrome://restart"
 }
 
 # 7. Chrome'un Kapanip Yeni Surumle Yeniden Acilmasini Bekle
 if ($WaitForRestart) {
-    $now = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Write-Host "[$now] [RELAUNCH] Google Chrome'un kapanmasi bekleniyor..." -ForegroundColor Cyan
+    Log-Uia "Google Chrome'un kapanmasi bekleniyor..." -Level 'INFO' -Color Cyan
 
     # Eski pencerenin kapanmasini bekle (maks 10 sn)
     $closeSw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -564,13 +645,12 @@ if ($WaitForRestart) {
         Start-Sleep -Milliseconds 400
     }
 
-    Write-Host "[$now] [RELAUNCH] Google Chrome'un yeni surumle baslamasi bekleniyor..." -ForegroundColor Cyan
+    Log-Uia "Google Chrome'un yeni surumle baslamasi bekleniyor..." -Level 'INFO' -Color Cyan
 
     # Yeni Google Chrome penceresini yakala (eski HWND haric tutulur, maks 30 sn)
     $newWin = Get-GoogleChromeUiaWindow -ExpectedExePath $ChromeExePath -WaitSec 30 -ExcludeHwnd $hwnd
     if ($newWin) {
-        $now = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        Write-Host "[$now] [RELAUNCH] Yeniden baslatilan Google Chrome penceresi yakalandi: '$($newWin.Current.Name)'" -ForegroundColor Green
+        Log-Uia "Yeniden baslatilan Google Chrome penceresi yakalandi: '$($newWin.Current.Name)'" -Level 'INFO' -Color Green
         
         # Sayfanin gelmesini bekle
         Start-Sleep -Seconds 5
@@ -592,12 +672,11 @@ if ($WaitForRestart) {
             $newVersion = (Get-Item -LiteralPath $ChromeExePath).VersionInfo.FileVersion
         }
 
-        $now = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        Write-Host "[$now] [RELAUNCH] ========================================================" -ForegroundColor Green
-        Write-Host "[$now] [RELAUNCH] GOOGLE CHROME YENIDEN BASLATMA BASARIYLA TAMAMLANDI!" -ForegroundColor Green
-        Write-Host "[$now] [RELAUNCH] Eski Surum : $currentVersion" -ForegroundColor Gray
-        Write-Host "[$now] [RELAUNCH] Yeni Surum : $newVersion" -ForegroundColor Green
-        Write-Host "[$now] [RELAUNCH] ========================================================" -ForegroundColor Green
+        Log-Uia "========================================================" -Level 'SUCCESS' -Color Green
+        Log-Uia "GOOGLE CHROME YENIDEN BASLATMA BASARIYLA TAMAMLANDI!" -Level 'SUCCESS' -Color Green
+        Log-Uia "Eski Surum : $currentVersion" -Level 'INFO' -Color Gray
+        Log-Uia "Yeni Surum : $newVersion" -Level 'SUCCESS' -Color Green
+        Log-Uia "========================================================" -Level 'SUCCESS' -Color Green
 
         if ($CloseAfterCheck) {
             Stop-GoogleChromeProcess -ExpectedExePath $ChromeExePath

@@ -720,7 +720,8 @@ function Invoke-ChromeDriverUpdate {
                         -ChromeExePath $resolvedChromeExe `
                         -CleanSession:$true `
                         -WaitForRestart:$true `
-                        -CloseAfterCheck:$true
+                        -CloseAfterCheck:$true `
+                        -LogCb $LogCb
 
                     if ($uiaResult -and $uiaResult.Success) {
                         if ($uiaResult.Relaunched -and $uiaResult.NewVersion) {
